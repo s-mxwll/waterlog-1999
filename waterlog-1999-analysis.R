@@ -7,6 +7,7 @@ library(glue)
 library(tidylo)
 library(rvest)
 library(scales)
+library(textdata)
 library(tidytext)
 library(tidyverse)
 
@@ -148,7 +149,7 @@ waterlog_tidy %>%
   mutate(word = fct_reorder(word, n)) %>% 
   ggplot(aes(n, word)) +
   geom_col(fill = "#006994") +
-  labs(title = "Unsurprisingly in a book about wild swimming, water is the most common word",
+  labs(title = "Unsurprisingly for a book about wild swimming, water is the most common word",
        subtitle = "Top 20 most common words after deleting stop words",
        x = n_label,
        y = NULL,
@@ -178,6 +179,25 @@ waterlog_tidy %>%
        subtitle = "Number of times water appears in each chapter",
        x = "Chapter number",
        y = "n(water)")
+
+# Shown as percentage:
+waterlog_tidy %>% 
+  group_by(chapter_number, chapter_title) %>% 
+  count(yay_nay = word == "water") %>% 
+  summarise(n = n,
+            total = sum(n)) %>% 
+  slice(2) %>% 
+  ungroup() %>% 
+  mutate(water_pct = n/total,
+         chapter = glue("{chapter_title} ({chapter_number})"),
+         chapter = fct_reorder(chapter, water_pct)) %>% 
+  ggplot(aes(chapter_number, water_pct)) +
+  geom_col(fill = "#006994") +
+  scale_y_continuous(labels = percent_format()) +
+  labs(title = "Which chapters are the wettest?",
+       subtitle = "n(water)/n(total)",
+       x = "Chapter number",
+       y = "% water")
 
 # Percentage of words that are water by chapter:
 waterlog_tidy %>% 
@@ -265,6 +285,61 @@ waterlog_tidy %>%
        y = "Water body",
        caption = caption)
 
+temp <- c("hot", "cold")
+
+#
+waterlog_bigrams <- waterlog_raw %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+# 
+bigram_counts <- waterlog_bigrams %>% 
+  count(bigram, sort = TRUE) %>% 
+  separate(bigram, into = c("word1", "word2"), sep = " ") %>% 
+  filter(word1 %in% temp,
+         !word2 %in% stop_words$word) %>% 
+  count(word1, word2, wt = n, sort = TRUE) %>% 
+  rename(total = n)
+
+# 
+word_ratios <- bigram_counts %>% 
+  group_by(word2) %>% 
+  filter(sum(total) > 1) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = word1,
+              values_from = total,
+              values_fill = 0) %>% 
+  mutate_if(is.integer, funs((. + 1) / sum(. + 1))) %>% 
+  mutate(log_ratio = log2(hot / cold)) %>% 
+  arrange(desc(log_ratio))
+
+#
+word_ratios %>% 
+  mutate(abs_lr = abs(log_ratio)) %>%
+  group_by(log_ratio < 0) %>%
+  top_n(15, abs_lr) %>%
+  ungroup() %>%
+  filter(!word2 %in% c("tap",
+                       "sensors")) %>% 
+  mutate(word = reorder(word2, log_ratio)) %>%
+  ggplot(aes(log_ratio, word, colour = log_ratio < 0)) +
+  geom_segment(aes(y = word,
+                   yend = word,
+                   x = 0,
+                   xend = log_ratio),
+               size = 1.1) +
+  geom_point(size = 3.5) +
+  labs(title = "Words paired with 'hot' and 'cold' in Waterlog",
+       subtitle = "Cold bathing demands a hot chocolate",
+       x = "Relative appearance after 'hot' compared to 'cold'",
+       y = NULL) +
+  scale_colour_manual(values = c("#942F00", "#006994"),
+                      name = "",
+                      labels = c("More 'hot'", "More 'cold'")) +
+  scale_x_continuous(limits = c(-2,3),
+                     breaks = seq(-2, 3),
+                     labels = c("0.25x", "0.5x", 
+                                "Same", "2x", "4x", "8x"))
+
 # SENTIMENT ANALYSIS ------------------------------------------------------
 
 # Sentiment score for each 80-line chunk:
@@ -290,7 +365,7 @@ waterlog_tidy %>%
               values_from = n,
               values_fill = 0) %>% 
   mutate(sentiment = positive - negative) %>% 
-  arrange(sentiment)
+  arrange(sentiment) %>% 
   ggplot(aes(chapter_number, sentiment, fill = sentiment)) +
   geom_col(show.legend = FALSE) +
   scale_fill_gradient(low = "#006994",
@@ -344,7 +419,7 @@ bing_word_count <- waterlog_tidy %>%
 # Which words contribute more to sentiment score?
 bing_word_count %>% 
   group_by(sentiment) %>% 
-  top_n(20) %>% 
+  top_n(15) %>% 
   ungroup() %>% 
   mutate(word = reorder(word, n)) %>%
   ggplot(aes(n, word, fill = sentiment)) +
